@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="id">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>POS Sale Transaction (mock)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 16px;
+      color: #111
+    }
+
+    section {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px
+    }
+
+    h2 {
+      font-size: 15px;
+      margin: 0 0 8px
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%
+    }
+
+    td,
+    th {
+      padding: 4px 6px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+      font-size: 13px
+    }
+
+    button {
+      padding: 6px 12px;
+      cursor: pointer
+    }
+
+    .err {
+      color: #d11;
+      font-size: 13px
+    }
+
+    .ok {
+      color: #067d3c
+    }
+
+    [hidden] {
+      display: none !important
+    }
+  </style>
+</head>
+
+<body>
+  <h1 style="font-size:18px">Sale Transaction</h1>
+
+  <section id="catalog">
+    <h2>Items</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Price</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="catalog-body"></tbody>
+    </table>
+  </section>
+
+  <section id="cart">
+    <h2>Cart</h2>
+    <div id="cart-empty">Cart is empty</div>
+    <table id="cart-table" hidden>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Qty</th>
+          <th>Subtotal</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="cart-body"></tbody>
+    </table>
+    <p>Subtotal: <strong data-testid="subtotal">Rp 0</strong></p>
+    <p>Discount: <strong data-testid="discount">Rp 0</strong></p>
+    <p>Total: <strong data-testid="total">Rp 0</strong></p>
+    <button id="apply-discount" type="button">Apply Discount/Promotion</button>
+    <div data-testid="discount-msg" role="status"></div>
+  </section>
+
+  <section id="payment">
+    <h2>Payment</h2>
+    <label><input type="radio" name="method" value="cash" checked> Cash</label>
+    <label><input type="radio" name="method" value="qris"> QRIS</label>
+    <label><input type="radio" name="method" value="split"> Split 40:60 (Cash : QRIS)</label>
+
+    <div id="split-info" hidden>
+      <p>Cash (40%): <strong data-testid="split-cash">Rp 0</strong></p>
+      <p>QRIS (60%): <strong data-testid="split-qris">Rp 0</strong></p>
+    </div>
+
+    <div id="cash-box">
+      <label>Cash received <input type="number" id="cash-received" min="0"></label>
+      <p>Change: <strong data-testid="change">Rp 0</strong></p>
+    </div>
+
+    <div id="qris-box" hidden>
+      <div data-testid="qris-code" style="border:1px dashed #999;padding:12px;display:inline-block">[QR CODE]</div>
+      <div>
+        <button type="button" id="qris-paid">Simulate QRIS Paid</button>
+        <button type="button" id="qris-fail">Simulate QRIS Failed</button>
+      </div>
+      <p data-testid="qris-status">QRIS: waiting</p>
+    </div>
+
+    <button type="button" id="pay">Process Payment</button>
+    <div data-testid="pay-msg" class="err" role="alert"></div>
+  </section>
+
+  <section id="done" hidden>
+    <h2>Sale Complete</h2>
+    <p data-testid="sale-status" class="ok">Payment approved</p>
+    <pre data-testid="receipt"></pre>
+    <button type="button" id="print">Print Receipt</button>
+    <label>Email <input type="email" id="receipt-email"></label>
+    <button type="button" id="send-digital">Send Digital Receipt</button>
+    <div data-testid="receipt-msg" role="status"></div>
+  </section>
+
+  <script>
+    // ---- Mock business rules (ASSUMPTIONS, see README) ----
+    const CATALOG = [
+      { id: 'A', name: 'Item A', price: 30000 },
+      { id: 'B', name: 'Item B', price: 45000 },
+      { id: 'C', name: 'Item C', price: 20000 },
+      { id: 'D', name: 'Item D', price: 60000 },
+      { id: 'E', name: 'Item E', price: 49999 },
+      { id: 'F', name: 'Item F', price: 50000 },
+    ];
+    const DISCOUNT_MIN = 100000;
+    const DISCOUNT_RATE = 0.10;
+    const CASH_RATIO = 0.4;
+
+    const idr = (n) => 'Rp ' + n.toLocaleString('id-ID');
+    const $ = (s) => document.querySelector(s);
+    const T = (id) => document.querySelector(`[data-testid="${id}"]`);
+
+    const state = { cart: {}, discountApplied: false, qris: 'idle', sale: null, cashPaid: 0 };
+
+    const subtotal = () => Object.entries(state.cart)
+      .reduce((s, [id, q]) => s + CATALOG.find(c => c.id === id).price * q, 0);
+    const discountAmt = () => (state.discountApplied && subtotal() >= DISCOUNT_MIN)
+      ? Math.round(subtotal() * DISCOUNT_RATE) : 0;
+    const total = () => subtotal() - discountAmt();
+    const cashPart = () => Math.round(total() * CASH_RATIO);
+    const qrisPart = () => total() - cashPart();
+    const method = () => document.querySelector('input[name=method]:checked').value;
+
+    function renderCatalog() {
+      $('#catalog-body').innerHTML = CATALOG.map(c =>
+        `<tr><td>${c.name}</td><td>${idr(c.price)}</td>
+       <td><button type="button" data-add="${c.id}" aria-label="Add ${c.name}">Add to Cart</button></td></tr>`).join('');
+    }
+
+    function render() {
+      const ids = Object.keys(state.cart);
+      $('#cart-empty').hidden = ids.length > 0;
+      $('#cart-table').hidden = ids.length === 0;
+      $('#cart-body').innerHTML = ids.map(id => {
+        const c = CATALOG.find(x => x.id === id), q = state.cart[id];
+        return `<tr data-row="${id}"><td>${c.name}</td>
+        <td><button type="button" data-dec="${id}" aria-label="Decrease ${c.name}">-</button>
+            <span data-qty="${id}">${q}</span>
+            <button type="button" data-inc="${id}" aria-label="Increase ${c.name}">+</button></td>
+        <td>${idr(c.price * q)}</td>
+        <td><button type="button" data-rm="${id}" aria-label="Remove ${c.name}">Remove</button></td></tr>`;
+      }).join('');
+      // discount auto-revoked when threshold no longer met
+      if (state.discountApplied && subtotal() < DISCOUNT_MIN) {
+        state.discountApplied = false;
+        T('discount-msg').textContent = 'Discount removed: minimum purchase Rp 100.000 not met';
+      }
+      T('subtotal').textContent = idr(subtotal());
+      T('discount').textContent = idr(discountAmt());
+      T('total').textContent = idr(total());
+      T('split-cash').textContent = idr(cashPart());
+      T('split-qris').textContent = idr(qrisPart());
+      updateChange();
+    }
+
+    function updateChange() {
+      const need = method() === 'split' ? cashPart() : total();
+      const got = Number($('#cash-received').value || 0);
+      T('change').textContent = idr(Math.max(0, got - need));
+    }
+
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t.dataset.add) { state.cart[t.dataset.add] = (state.cart[t.dataset.add] || 0) + 1; render(); }
+      if (t.dataset.inc) { state.cart[t.dataset.inc]++; render(); }
+      if (t.dataset.dec) { if (--state.cart[t.dataset.dec] <= 0) delete state.cart[t.dataset.dec]; render(); }
+      if (t.dataset.rm) { delete state.cart[t.dataset.rm]; render(); }
+    });
+
+    $('#apply-discount').addEventListener('click', () => {
+      if (!Object.keys(state.cart).length) { T('discount-msg').textContent = 'Cart is empty'; return; }
+      if (subtotal() >= DISCOUNT_MIN) {
+        state.discountApplied = true;
+        T('discount-msg').textContent = 'Discount applied: 10%';
+      } else {
+        state.discountApplied = false;
+        T('discount-msg').textContent = 'Discount not applied: minimum purchase Rp 100.000';
+      }
+      render();
+    });
+
+    document.querySelectorAll('input[name=method]').forEach(r => r.addEventListener('change', () => {
+      const m = method();
+      $('#split-info').hidden = m !== 'split';
+      $('#cash-box').hidden = m === 'qris';
+      $('#qris-box').hidden = m === 'cash';
+      state.qris = 'idle'; T('qris-status').textContent = 'QRIS: waiting';
+      updateChange();
+    }));
+    $('#cash-received').addEventListener('input', updateChange);
+
+    $('#qris-paid').addEventListener('click', () => { state.qris = 'paid'; T('qris-status').textContent = 'QRIS: paid'; });
+    $('#qris-fail').addEventListener('click', () => { state.qris = 'failed'; T('qris-status').textContent = 'QRIS: failed'; });
+
+    $('#pay').addEventListener('click', () => {
+      const msg = T('pay-msg'); msg.textContent = '';
+      if (total() <= 0) { msg.textContent = 'Cart is empty'; return; }
+      const m = method();
+      const cashNeed = m === 'cash' ? total() : m === 'split' ? cashPart() : 0;
+      const got = Number($('#cash-received').value || 0);
+      if (m !== 'qris' && got < cashNeed) { msg.textContent = 'Insufficient cash received'; return; }
+      if (m !== 'cash' && state.qris !== 'paid') {
+        msg.textContent = state.qris === 'failed' ? 'QRIS payment failed, please retry' : 'QRIS payment not completed';
+        return;
+      }
+      const lines = Object.entries(state.cart).map(([id, q]) => {
+        const c = CATALOG.find(x => x.id === id); return `${c.name} x${q}  ${idr(c.price * q)}`;
+      });
+      const pays = [];
+      if (m === 'cash') pays.push(`Cash ${idr(total())}`);
+      if (m === 'qris') pays.push(`QRIS ${idr(total())}`);
+      if (m === 'split') pays.push(`Cash ${idr(cashPart())}`, `QRIS ${idr(qrisPart())}`);
+      state.sale = { total: total(), method: m };
+      T('receipt').textContent = [...lines, `Subtotal ${idr(subtotal())}`, `Discount ${idr(discountAmt())}`,
+      `Total ${idr(total())}`, ...pays, `Change ${idr(m === 'qris' ? 0 : Math.max(0, got - cashNeed))}`].join('\n');
+      $('#done').hidden = false;
+      $('#pay').disabled = true;
+    });
+
+    $('#print').addEventListener('click', () => { T('receipt-msg').textContent = 'Receipt sent to printer'; });
+    $('#send-digital').addEventListener('click', () => {
+      const v = $('#receipt-email').value.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { T('receipt-msg').textContent = 'Invalid email'; return; }
+      T('receipt-msg').textContent = 'Digital receipt sent to ' + v;
+    });
+
+    renderCatalog(); render();
+  </script>
+</body>
+
+</html>

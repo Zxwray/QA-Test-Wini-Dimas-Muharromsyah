@@ -1,0 +1,18 @@
+{
+  "name": "qa-test-borobudur",
+  "version": "1.0.0",
+  "description": "QA Test - Playwright automation",
+  "scripts": {
+    "test": "playwright test",
+    "test:web": "playwright test 02-borobudur-website --project=website-desktop --project=website-mobile",
+    "test:pos": "playwright test 03-pos-flow --project=mobile-ui",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  },
+  "private": true
+}
